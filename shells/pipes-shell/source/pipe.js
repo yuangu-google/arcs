@@ -33,6 +33,7 @@ import 'https://$particles/PipeApps/AndroidAutofill.arcs'
 import 'https://$particles/Pipes/Pipes.arcs'
 import 'https://$particles/Restaurants/Restaurants.arcs'
 import 'https://$particles/Notification/Notification.arcs'
+import 'https://$particles/Native/Wasm/wasm.arcs'
 `;
 
 export const initPipe = async (client, paths, storage) => {

@@ -18,6 +18,8 @@ export class DevShellLoader extends PlatformLoader {
   }
 
   loadResource(path) {
+    console.log("xxx");
+    console.log(path);
     if (!path) {
       return undefined;
     }
