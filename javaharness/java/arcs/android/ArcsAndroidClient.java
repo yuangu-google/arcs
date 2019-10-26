@@ -16,7 +16,6 @@ import java.util.function.Consumer;
 
 import javax.inject.Inject;
 
-import arcs.api.ArcData;
 import arcs.api.ArcsMessageSender;
 import arcs.api.Particle;
 import arcs.api.PecInnerPort;

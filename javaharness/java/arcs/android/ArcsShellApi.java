@@ -9,7 +9,6 @@ import java.util.Map;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
-import arcs.api.ArcData;
 import arcs.api.ArcsMessageSender;
 import arcs.api.Constants;
 import arcs.api.PecInnerPort;

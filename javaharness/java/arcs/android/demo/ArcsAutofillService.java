@@ -18,7 +18,7 @@ import java.util.Optional;
 import javax.inject.Inject;
 
 import arcs.android.ArcsAndroidClient;
-import arcs.api.ArcData;
+import arcs.android.ArcData;
 
 /**
  * Demo implementation of an {@link AutofillService} for Arcs. This service retrieves Autofill

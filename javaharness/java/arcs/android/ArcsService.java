@@ -9,8 +9,6 @@ import java.util.List;
 
 import javax.inject.Inject;
 
-import arcs.api.ArcData;
-
 /**
  * ArcsService wraps Arcs runtime. Other Android activities/services are expected to connect to
  * ArcsService to communicate with Arcs.

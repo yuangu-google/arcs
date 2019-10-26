@@ -89,6 +89,7 @@ http_archive(
 load("@rules_jvm_external//:defs.bzl", "maven_install")
 
 AUTO_VALUE_VERSION = "1.7"
+AUTO_VALUE_PARCEL_VERSION = "0.2.8"
 
 maven_install(
     artifacts = [
@@ -102,6 +103,7 @@ maven_install(
         "com.google.auto.value:auto-value:" + AUTO_VALUE_VERSION,
         "com.google.auto.value:auto-value-annotations:" + AUTO_VALUE_VERSION,
         "com.google.truth:truth:1.0",
+        "com.ryanharter.auto.value:auto-value-parcel:" + AUTO_VALUE_PARCEL_VERSION,
         "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.2",
         "org.jetbrains.kotlinx:kotlinx-coroutines-core-js:1.3.2",
         "org.jetbrains.kotlinx:atomicfu:0.13.1",

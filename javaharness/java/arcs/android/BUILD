@@ -13,6 +13,9 @@ android_library(
     assets = [
         "//third_party/javascript/arcs:pipes-shell-assets",
     ],
+    plugins = [
+        "//third_party/java/android_libs/auto_value_parcel",
+    ],
     assets_dir = "",
     exports_manifest = 1,
     idl_import_root = ".",

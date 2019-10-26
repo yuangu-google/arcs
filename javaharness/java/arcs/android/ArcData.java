@@ -1,7 +1,11 @@
-package arcs.api;
+package arcs.android;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import arcs.api.Id;
+import arcs.api.IdGenerator;
+import arcs.api.Particle;
 
 public class ArcData {
   private String arcId;
