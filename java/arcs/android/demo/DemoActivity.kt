@@ -19,7 +19,6 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -137,12 +136,14 @@ class DemoActivity : AppCompatActivity() {
       }
     }
 
+    setToolbar("Connecting to signal server")
     connectToSignallingServer();
     initializePeerConnectionFactory();
     initializePeerConnections();
   }
 
   override fun onDestroy() {
+    socket.disconnect()
     scope.cancel()
     super.onDestroy()
   }
@@ -164,14 +165,19 @@ class DemoActivity : AppCompatActivity() {
         }
         .on(EVENT_DISCONNECT) { Log.d(TAG, "connectToSignallingServer: disconnect") }
         .on("ipaddr") { Log.d(TAG, "connectToSignallingServer: ipaddr") }
-        .on("created") { Log.d(TAG, "connectToSignallingServer: created") }
+        .on("created") {
+          Log.d(TAG, "connectToSignallingServer: created")
+          setToolbar("Waiting for others to join chat")
+        }
         .on("full") { Log.d(TAG, "connectToSignallingServer: full") }
         .on("join") {
           Log.d(TAG, "connectToSignallingServer: join")
+          setToolbar("In chat")
           isChannelReady = true
         }
         .on("joined") {
           Log.d(TAG, "connectToSignallingServer: joined")
+          setToolbar("In chat")
           isChannelReady = true
           maybeStart()
         }
@@ -308,7 +314,7 @@ class DemoActivity : AppCompatActivity() {
       }
 
       override fun onIceConnectionChange(iceConnectionState: IceConnectionState) {
-        Log.d(TAG, "onIceConnectionChange: ")
+        Log.d(TAG, "onIceConnectionChange: " + iceConnectionState.name)
       }
 
       override fun onIceConnectionReceivingChange(b: Boolean) {
@@ -426,6 +432,12 @@ class DemoActivity : AppCompatActivity() {
 
     override fun getItemViewType(position: Int): Int {
       return if(messages[position].isRecv) 0 else 1
+    }
+  }
+
+  private fun setToolbar(text: String) {
+    runOnUiThread {
+      supportActionBar?.title = text
     }
   }
 
