@@ -19,3 +19,10 @@ recipe PersonRecipe
 
   ReadPerson
     person: reads recipePerson
+
+recipe ChatRecipe
+  message: create 'message'
+
+particle ChatParticle in 'arcs.android.demo.DemoActivity.ChatParticle'
+  message: reads writes Chat { message: Text }
+

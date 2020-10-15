@@ -1,4 +1,4 @@
-package arcs.sdk.android.storage
+package arcs.sdk.android.storage.remote
 
 import arcs.android.storage.RemoteMessageProto
 import arcs.android.util.decodeProto
@@ -15,7 +15,6 @@ import arcs.core.storage.StoreOptions
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BroadcastChannel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -26,10 +25,10 @@ import kotlinx.coroutines.flow.map
  * provided in the [stores] parameter.
  */
 class RemoteStorageEndpointManager(
-  private val sendChannel: Channel<ByteArray>,
-  private val recvChannel: BroadcastChannel<ByteArray>,
+  private val outputChannel: BroadcastChannel<ByteArray>,
+  private val inputChannel: BroadcastChannel<ByteArray>,
   private val scope: CoroutineScope
-  ) : StorageEndpointManager {
+) : StorageEndpointManager {
 
   var nextMsgId = atomic(1)
   var nextChannelId = atomic(1)
@@ -45,13 +44,18 @@ class RemoteStorageEndpointManager(
   ): StorageEndpoint<Data, Op, T> {
     return stores.getOrPut(storeOptions.storageKey) {
       val channelId = channelIdProvider()
-      val protoChannel = ProtoChannel<Data, Op, T>(sendChannel, recvChannel, channelId, msgIdProvider)
+      val protoChannel = ProtoChannel<Data, Op, T>(
+        outputChannel,
+        inputChannel,
+        channelId,
+        msgIdProvider
+      )
       protoChannel.sendConnect(storeOptions)
 
       return Unit.let {
         RemoteStorageEndpoint<Data, Op, T>(
-          sendChannel,
-          recvChannel,
+          outputChannel,
+          inputChannel,
           msgIdProvider,
           channelId,
           protoChannel
@@ -75,8 +79,8 @@ private suspend fun BroadcastChannel<ByteArray>.waitForAck(channelId: Int, id: I
 
 /** A [StorageEndpoint] that directly wraps an [ActiveStore]. */
 class RemoteStorageEndpoint<Data : CrdtData, Op : CrdtOperationAtTime, T>(
-  private val sendChannel: Channel<ByteArray>,
-  private val recvChannel: BroadcastChannel<ByteArray>,
+  private val outputChannel: BroadcastChannel<ByteArray>,
+  private val inputChannel: BroadcastChannel<ByteArray>,
   private val msgIdProvider: () -> Int,
   private val channelId: Int,
   private val protoChannel: ProtoChannel<Data, Op, T>
@@ -103,12 +107,14 @@ class RemoteStorageEndpoint<Data : CrdtData, Op : CrdtOperationAtTime, T>(
 //    protoChannel.sendClose()
     println("Close called2")
     val msgId = msgIdProvider()
-    sendChannel.send(
+    outputChannel.send(
       RemoteMessageProto.newBuilder().setMessageId(
         msgId
-      ).setChannelId(channelId).setCloseMessage(RemoteMessageProto.CloseMessageProto.getDefaultInstance()).build().toByteArray()
+      ).setChannelId(channelId)
+        .setCloseMessage(RemoteMessageProto.CloseMessageProto.getDefaultInstance()).build()
+        .toByteArray()
     )
     // send close message
-    recvChannel.waitForAck(channelId, msgId)
+    inputChannel.waitForAck(channelId, msgId)
   }
 }

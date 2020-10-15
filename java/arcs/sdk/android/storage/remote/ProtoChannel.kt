@@ -1,6 +1,5 @@
-package arcs.sdk.android.storage
+package arcs.sdk.android.storage.remote
 
-import arcs.android.storage.RemoteMessage
 import arcs.android.storage.RemoteMessageProto
 import arcs.android.storage.decode
 import arcs.android.storage.toProto
@@ -12,7 +11,6 @@ import arcs.core.storage.ProxyMessage
 import arcs.core.storage.StoreOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BroadcastChannel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -20,9 +18,10 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 
+/** Sends/Receives [RemoteMessageProto] messages over a [Channel] as [ByteArray]. */
 class ProtoChannel<Data : CrdtData, Op : CrdtOperationAtTime, T>(
-  val sendChannel: Channel<ByteArray>,
-  val recvChannel: BroadcastChannel<ByteArray>,
+  val outputChannel: BroadcastChannel<ByteArray>,
+  val inputChannel: BroadcastChannel<ByteArray>,
   val channelId: Int,
   val msgIdProvider: () -> Int
 ) {
@@ -38,7 +37,8 @@ class ProtoChannel<Data : CrdtData, Op : CrdtOperationAtTime, T>(
 
   fun newConnect(storeOptions: StoreOptions) =
     newEnvelope().setConnectMessage(
-      RemoteMessageProto.ConnectMessageProto.newBuilder().setStoreOptions(storeOptions.toProto()).build()
+      RemoteMessageProto.ConnectMessageProto.newBuilder().setStoreOptions(storeOptions.toProto())
+        .build()
     ).build()
 
   fun newProxyMessage(message: ProxyMessage<Data, Op, T>) =
@@ -46,26 +46,26 @@ class ProtoChannel<Data : CrdtData, Op : CrdtOperationAtTime, T>(
 
   suspend fun sendClose() {
     val closeMsg = newClose()
-    sendChannel.send(closeMsg.toByteArray())
+    outputChannel.send(closeMsg.toByteArray())
 //    recvChannel.waitForAck(channelId, closeMsg.messageId)
   }
 
   suspend fun sendIdle() {
     val idleMsg = newIdle()
-    sendChannel.send(idleMsg.toByteArray())
-    recvChannel.waitForAck(channelId, idleMsg.messageId)
+    outputChannel.send(idleMsg.toByteArray())
+    inputChannel.waitForAck(channelId, idleMsg.messageId)
   }
 
   suspend fun sendConnect(storeOptions: StoreOptions) {
     val connectMsg = newConnect(storeOptions)
-    sendChannel.send(connectMsg.toByteArray())
-    recvChannel.waitForAck(channelId, connectMsg.messageId)
+    outputChannel.send(connectMsg.toByteArray())
+    inputChannel.waitForAck(channelId, connectMsg.messageId)
   }
 
   suspend fun sendProxyMessage(message: ProxyMessage<Data, Op, T>) {
     val proxyMessage = newProxyMessage(message)
-    sendChannel.send(proxyMessage.toByteArray())
-    recvChannel.waitForAck(channelId, proxyMessage.messageId)
+    outputChannel.send(proxyMessage.toByteArray())
+    inputChannel.waitForAck(channelId, proxyMessage.messageId)
   }
 
   suspend fun sendProxyMessageToClient(channelId: Int, message: ProxyMessage<Data, Op, T>) {
@@ -74,7 +74,7 @@ class ProtoChannel<Data : CrdtData, Op : CrdtOperationAtTime, T>(
       .setMessageId(msgIdProvider())
       .setProxyMessage(message.toProto())
       .build()
-    recvChannel.send(proxyMessage.toByteArray())
+    outputChannel.send(proxyMessage.toByteArray())
   }
 
   suspend fun sendAck(channelId: Int, msgId: Int) {
@@ -85,14 +85,14 @@ class ProtoChannel<Data : CrdtData, Op : CrdtOperationAtTime, T>(
         RemoteMessageProto.AckMessageProto.newBuilder().setMessageId(msgId).build()
       ).build()
     println("Sending ack froms server for channelId = ${ackMsg.channelId}, id=${ackMsg.messageId}")
-    recvChannel.send(ackMsg.toByteArray())
+    outputChannel.send(ackMsg.toByteArray())
   }
 
   fun startClient(
     callback: ProxyCallback<Data, Op, T>,
     scope: CoroutineScope
   ) {
-    recvChannel.openSubscription().consumeAsFlow().map { message ->
+    inputChannel.openSubscription().consumeAsFlow().map { message ->
       decodeProto(message, RemoteMessageProto.getDefaultInstance())
     }.filter {
       it.channelId == channelId
@@ -110,13 +110,12 @@ class ProtoChannel<Data : CrdtData, Op : CrdtOperationAtTime, T>(
     scope: CoroutineScope,
     callback: suspend (RemoteMessageProto) -> Unit
   ) {
-    sendChannel.consumeAsFlow().map { message ->
+    inputChannel.openSubscription().consumeAsFlow().map { message ->
       decodeProto(message, RemoteMessageProto.getDefaultInstance())
     }.onEach { callback(it) }.launchIn(scope)
   }
 
   suspend fun close() {
-
   }
 
   private suspend fun BroadcastChannel<ByteArray>.waitForAck(channelId: Int, id: Int) {
@@ -128,5 +127,3 @@ class ProtoChannel<Data : CrdtData, Op : CrdtOperationAtTime, T>(
     println("Ack received channel=$channelId, id=$id")
   }
 }
-
-

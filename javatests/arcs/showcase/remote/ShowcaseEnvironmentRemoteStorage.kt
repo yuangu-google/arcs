@@ -1,6 +1,6 @@
 @file:Suppress("EXPERIMENTAL_IS_NOT_ENABLED")
 
-package arcs.showcase
+package arcs.showcase.remote
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
@@ -11,11 +11,8 @@ import arcs.core.allocator.Arc
 import arcs.core.crdt.CrdtData
 import arcs.core.crdt.CrdtOperationAtTime
 import arcs.core.data.Plan
-import arcs.core.host.AbstractArcHost
 import arcs.core.host.ArcHost
 import arcs.core.host.ParticleRegistration
-import arcs.core.host.ParticleState
-import arcs.core.host.SchedulerProvider
 import arcs.core.storage.DirectStorageEndpointManager
 import arcs.core.storage.StorageEndpointManager
 import arcs.core.storage.StoreManager
@@ -25,13 +22,13 @@ import arcs.core.storage.driver.RamDisk
 import arcs.core.util.TaggedLog
 import arcs.jvm.host.ExplicitHostRegistry
 import arcs.jvm.host.JvmSchedulerProvider
-import arcs.jvm.util.JvmTime
 import arcs.sdk.Particle
-import arcs.sdk.android.storage.RemoteStorageEndpointManager
-import arcs.sdk.android.storage.RemoteStorageEndpointManagerServer
-import kotlin.coroutines.CoroutineContext
+import arcs.sdk.android.storage.remote.RemoteStorageEndpointManager
+import arcs.sdk.android.storage.remote.RemoteStorageEndpointManagerServer
+import arcs.showcase.ShowcaseHost
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -71,6 +68,8 @@ import org.junit.runners.model.Statement
 @ExperimentalCoroutinesApi
 class ShowcaseEnvironmentRemoteStorage(
   private val lifecycleTimeoutMillis: Long = 60000,
+  private val serverChannels: Deferred<ChannelPair>,
+  private val clientChannels: Deferred<ChannelPair>,
   vararg val particleRegistrations: ParticleRegistration
 ) : TestRule {
   private val log = TaggedLog { "ShowcaseEnvironment" }
@@ -79,9 +78,6 @@ class ShowcaseEnvironmentRemoteStorage(
   lateinit var arcHost: ShowcaseHost
 
   private val startedArcs = mutableListOf<Arc>()
-
-  constructor(vararg particleRegistrations: ParticleRegistration) :
-    this(60000, *particleRegistrations)
 
   /**
    * Starts an [Arc] for a given [Plan] and waits for it to be ready.
@@ -112,6 +108,10 @@ class ShowcaseEnvironmentRemoteStorage(
    */
   suspend inline fun <reified T : Particle> getParticle(arc: Arc): T {
     return arcHost.getParticle(arc.id.toString(), T::class.simpleName!!)
+  }
+
+  suspend inline fun <reified T : Particle> getParticle(arc: Arc, name: String): T {
+    return arcHost.getParticle(arc.id.toString(), name)
   }
 
   /**
@@ -185,21 +185,20 @@ class ShowcaseEnvironmentRemoteStorage(
         )
       }
     )
-    val sendChannel = Channel<ByteArray>(1000)
-    val recvChannel = BroadcastChannel<ByteArray>(1000)
 
     val storageEndpointManager = RemoteStorageEndpointManager(
-      sendChannel,
-      recvChannel,
+      clientChannels.await().outputChannel,
+      clientChannels.await().inputChannel,
       scope
     )
 
-    val remoteStorageServer = RemoteStorageEndpointManagerServer<CrdtData, CrdtOperationAtTime, Any?>(
-      sendChannel,
-      recvChannel,
-      actualStorageEndpointManager,
-      scope
-    )
+    val remoteStorageServer =
+      RemoteStorageEndpointManagerServer<CrdtData, CrdtOperationAtTime, Any?>(
+        serverChannels.await().outputChannel,
+        serverChannels.await().inputChannel,
+        actualStorageEndpointManager,
+        scope
+      )
 
     remoteStorageServer.start()
 
@@ -237,5 +236,15 @@ class ShowcaseEnvironmentRemoteStorage(
     val dbManager: AndroidSqliteDatabaseManager,
     val arcStorageEndpointManager: StorageEndpointManager,
     val arcHost: ArcHost
+  )
+
+  data class ChannelPair(
+    val outputChannel: BroadcastChannel<ByteArray>,
+    val inputChannel: BroadcastChannel<ByteArray>
+  )
+
+  data class ClientServer(
+    val server: ChannelPair,
+    val client: ChannelPair
   )
 }

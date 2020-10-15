@@ -1,14 +1,36 @@
 load("//third_party/java/arcs/build_defs:build_defs.bzl", "arcs_kt_android_library")
+load(
+    "//third_party/java/arcs/build_defs:native.oss.bzl",
+    "android_proto_library",
+    "proto_library",
+)
 
 licenses(["notice"])
 
 package(default_visibility = ["//java/arcs:allowed-packages"])
 
+proto_library(
+    name = "remote_message_proto",
+    srcs = ["remote_message.proto"],
+    deps = [
+        "//java/arcs/android/storage:proxy_message_proto",
+        "//java/arcs/android/storage:store_options_proto",
+        "//third_party/java/arcs/deps:protobuf_wrappers_proto",
+    ],
+)
+
+android_proto_library(
+    name = "remote_message_android_proto",
+    deps = [":remote_message_proto"],
+)
+
+
 arcs_kt_android_library(
-    name = "storage",
+    name = "remote",
     srcs = glob(["*.kt"]),
     manifest = "//java/arcs/android/common:AndroidManifest.xml",
     deps = [
+        ":remote_message_android_proto",
         "//java/arcs/android/common/resurrection",
         "//java/arcs/android/crdt",
         "//java/arcs/android/storage",
