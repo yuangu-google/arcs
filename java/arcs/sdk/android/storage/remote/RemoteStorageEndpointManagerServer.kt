@@ -1,36 +1,32 @@
-package arcs.sdk.android.storage
+package arcs.sdk.android.storage.remote
 
 import arcs.android.storage.decode
-import arcs.core.common.CounterFlow
 import arcs.core.crdt.CrdtData
-import arcs.core.crdt.CrdtOperation
 import arcs.core.crdt.CrdtOperationAtTime
-import arcs.core.storage.ActiveStore
-import arcs.core.storage.DirectStorageEndpointManager
-import arcs.core.storage.ProxyCallback
 import arcs.core.storage.ProxyMessage
 import arcs.core.storage.StorageEndpoint
 import arcs.core.storage.StorageEndpointManager
 import arcs.core.storage.StorageKey
-import arcs.core.storage.StoreManager
-import arcs.core.storage.StoreOptions
-import arcs.core.storage.StoreWriteBack
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.first
 
 /**
- * A [StorageEndpointManager] that creates communciates with another [StorageEndpoint] via
+ * A [StorageEndpointManager] that creates communicates with another [StorageEndpoint] via
  * byte-encoded Protobufs over a set of [Channel]s.
  */
 class RemoteStorageEndpointManagerServer<Data : CrdtData, Op : CrdtOperationAtTime, T>(
-  private val sendChannel: Channel<ByteArray>,
-  private val recvChannel: BroadcastChannel<ByteArray>,
+  private val outputChannel: BroadcastChannel<ByteArray>,
+  private val inputChannel: BroadcastChannel<ByteArray>,
   private val endpointManager: StorageEndpointManager,
   private val scope: CoroutineScope
-  ) {
-  val protoChannel = ProtoChannel<Data, Op, T>(sendChannel, recvChannel, 1, msgIdProvider = { 1 })
+) {
+  val protoChannel = ProtoChannel<Data, Op, T>(
+    outputChannel,
+    inputChannel,
+    1,
+    msgIdProvider = { 1 }
+  )
   var remoteEndpoints: MutableMap<Int, StorageEndpoint<Data, Op, T>?> = mutableMapOf()
   var remoteEndpointClients: MutableMap<StorageKey, MutableSet<Int>> = mutableMapOf()
   var remoteClientToKey: MutableMap<Int, StorageKey> = mutableMapOf()
@@ -55,6 +51,7 @@ class RemoteStorageEndpointManagerServer<Data : CrdtData, Op : CrdtOperationAtTi
                 protoChannel.sendProxyMessageToClient(clientId, proxyMessage)
               }
             }
+            println("Connected $channelId, ${message.messageId}")
             protoChannel.sendAck(channelId, message.messageId)
             endpoint
           }
@@ -83,4 +80,3 @@ class RemoteStorageEndpointManagerServer<Data : CrdtData, Op : CrdtOperationAtTi
     }
   }
 }
-

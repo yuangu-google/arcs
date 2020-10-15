@@ -1,0 +1,24 @@
+meta
+  namespace: arcs.showcase.remote
+
+
+@arcId('chatArcOne')
+recipe ChatRecipeOne
+  outMessage: create 'messageOne' @persistent
+  inMessage: map 'messageTwo'
+  ChatParticle
+    inMessage: reads inMessage
+    outMessage: writes outMessage
+
+@arcId('chatArcTwo')
+recipe ChatRecipeTwo
+  outMessage: create 'messageTwo' @persistent
+  inMessage: map 'messageOne'
+  ChatParticle
+    inMessage: reads inMessage
+    outMessage: writes outMessage
+
+particle ChatParticle in '.ChatParticle'
+  outMessage: writes Chat { message: Text }
+  inMessage: reads Chat { message: Text }
+
