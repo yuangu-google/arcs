@@ -375,23 +375,23 @@ abstract class AbstractArcHost(
 
   /** Serializes [ArcHostContext] onto storage asynchronously or synchronously as fall-back. */
   protected open suspend fun writeContextToStorage(arcId: String, context: ArcHostContext) {
-    if (!contextSerializationChannel.isClosedForSend) {
-      /** Serialize the [context] to storage in observed order asynchronously. */
-      contextSerializationChannel.send {
-        writeContextToStorageInternal(
-          arcId,
-          ArcHostContext(
-            context.arcId,
-            context.particles,
-            context.handleManager,
-            context.arcState
-          )
-        )
-      }
-    } else {
-      /** fall back to synchronous serialization. */
-      writeContextToStorageInternal(arcId, context)
-    }
+//    if (!contextSerializationChannel.isClosedForSend) {
+//      /** Serialize the [context] to storage in observed order asynchronously. */
+//      contextSerializationChannel.send {
+//        writeContextToStorageInternal(
+//          arcId,
+//          ArcHostContext(
+//            context.arcId,
+//            context.particles,
+//            context.handleManager,
+//            context.arcState
+//          )
+//        )
+//      }
+//    } else {
+//      /** fall back to synchronous serialization. */
+//      writeContextToStorageInternal(arcId, context)
+//    }
   }
 
   override suspend fun startArc(partition: Plan.Partition) {

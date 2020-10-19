@@ -11,6 +11,7 @@
 
 package arcs.android.demo
 
+import android.app.Application
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -22,14 +23,33 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import arcs.android.host.AndroidManifestHostRegistry
+import androidx.test.core.app.ApplicationProvider
+import androidx.work.testing.WorkManagerTestInitHelper
+import arcs.android.storage.database.AndroidSqliteDatabaseManager
 import arcs.core.allocator.Allocator
+import arcs.core.allocator.Arc
+import arcs.core.crdt.CrdtData
+import arcs.core.crdt.CrdtOperationAtTime
+import arcs.core.host.AbstractArcHost
 import arcs.core.host.EntityHandleManager
 import arcs.core.host.HostRegistry
+import arcs.core.host.ParticleConstructor
+import arcs.core.host.ParticleRegistration
+import arcs.core.host.ParticleState
+import arcs.core.host.SchedulerProvider
 import arcs.core.host.SimpleSchedulerProvider
+import arcs.core.host.toParticleIdentifier
+import arcs.core.storage.DirectStorageEndpointManager
+import arcs.core.storage.StorageEndpointManager
+import arcs.core.storage.StoreManager
+import arcs.core.storage.StoreWriteBack
+import arcs.core.storage.api.DriverAndKeyConfigurator
+import arcs.core.storage.driver.RamDisk
+import arcs.jvm.host.ExplicitHostRegistry
 import arcs.jvm.util.JvmTime
-import arcs.sdk.android.storage.AndroidStorageServiceEndpointManager
-import arcs.sdk.android.storage.service.DefaultConnectionFactory
+import arcs.sdk.Particle
+import arcs.sdk.android.storage.remote.RemoteStorageEndpointManager
+import arcs.sdk.android.storage.remote.RemoteStorageEndpointManagerServer
 import io.socket.client.IO
 import io.socket.client.Socket
 import io.socket.client.Socket.EVENT_CONNECT
@@ -38,12 +58,19 @@ import java.net.URISyntaxException
 import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import kotlin.coroutines.CoroutineContext
+import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BroadcastChannel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.consumeAsFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONException
 import org.json.JSONObject
 import org.webrtc.DataChannel
@@ -84,34 +111,43 @@ class DemoActivity : AppCompatActivity() {
    */
   private lateinit var allocator: Allocator
   private lateinit var hostRegistry: HostRegistry
+  private lateinit var chatParticle: ChatParticle
+  private lateinit var arcHost: ChatHost
+  private lateinit var arc: Arc
+  private lateinit var storageEndpointManager: StorageEndpointManager
+
+
   private lateinit var input: EditText
   private lateinit var sendBtn: Button
   private lateinit var msgList: RecyclerView
   private lateinit var msgAdapter: RecyclerView.Adapter<*>
   private lateinit var msgLayoutManager: RecyclerView.LayoutManager
   private val messages: ArrayList<Message> = ArrayList()
+  val randomNumber = Random.nextLong(Long.MAX_VALUE)
 
-  private val storageEndpointManager = AndroidStorageServiceEndpointManager(
-    scope,
-    DefaultConnectionFactory(this)
-  )
+  val chatParticleCtor: ParticleConstructor = { plan ->
+    ChatParticle(::receiveMessage)
+  }
 
-  override fun onCreate(savedInstanceState: Bundle?) {
+  fun receiveMessage(msg: String, particle: Particle) {
+    runOnUiThread {
+      Log.d(TAG, "Updating message")
+      messages.add(Message(msg, isRecv = true))
+      msgAdapter.notifyDataSetChanged()
+    }
+  }
+
+
+  val outputChannel = BroadcastChannel<ByteArray>(1000)
+  val inputChannel = BroadcastChannel<ByteArray>(1000)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
 
     setContentView(R.layout.main_activity)
 
     scope.launch {
-      hostRegistry = AndroidManifestHostRegistry.create(this@DemoActivity)
 
-      allocator = Allocator.create(
-        hostRegistry,
-        EntityHandleManager(
-          time = JvmTime,
-          scheduler = schedulerProvider("personArc"),
-          storageEndpointManager = storageEndpointManager
-        )
-      )
 
       input = findViewById(R.id.input)
       msgLayoutManager = LinearLayoutManager(this@DemoActivity)
@@ -126,8 +162,11 @@ class DemoActivity : AppCompatActivity() {
         if (sendChannel.state() == DataChannel.State.OPEN) {
           val text = input.text.toString()
           if (text.isNotEmpty()) {
-            val data = stringToByteBuffer(text)
-            sendChannel.send(DataChannel.Buffer(data, false))
+            scope.launch {
+              chatParticle.sendMessage(text)
+            }
+//            val data = stringToByteBuffer(text)
+//            sendChannel.send(DataChannel.Buffer(data, false))
             Log.d(TAG, "Sending updating message")
             messages.add(Message(text, isRecv = false))
             msgAdapter.notifyDataSetChanged()
@@ -138,8 +177,7 @@ class DemoActivity : AppCompatActivity() {
 
     setToolbar("Connecting to signal server")
     connectToSignallingServer();
-    initializePeerConnectionFactory();
-    initializePeerConnections();
+
   }
 
   override fun onDestroy() {
@@ -224,6 +262,8 @@ class DemoActivity : AppCompatActivity() {
           }
         }
       Log.d(TAG, "about to connect")
+      initializePeerConnectionFactory();
+      initializePeerConnections();
       socket.connect()
     } catch (e: URISyntaxException) {
       Log.d(TAG, "exception")
@@ -282,6 +322,9 @@ class DemoActivity : AppCompatActivity() {
     factory = PeerConnectionFactory(null)
   }
 
+  enum class ClientServer { Client, Server, Unknown }
+  var clientServer: ClientServer = ClientServer.Unknown
+
   private fun initializePeerConnections() {
     peerConnection = createPeerConnection(factory)
     sendChannel = peerConnection.createDataChannel("sendDataChannel", Init())
@@ -289,12 +332,17 @@ class DemoActivity : AppCompatActivity() {
       override fun onBufferedAmountChange(l: Long) {}
       override fun onStateChange() {
         Log.d(TAG, "local data channel onStateChange: " + sendChannel.state().toString())
+        sendChannel.send(DataChannel.Buffer(stringToByteBuffer(randomNumber.toString()), false))
+        Log.d(TAG, "sent randomNumber $randomNumber")
+
         runOnUiThread {
-          sendBtn.isEnabled = sendChannel.state() == DataChannel.State.OPEN
-          if (sendBtn.isEnabled) {
-            sendBtn.alpha = 1.0f
-          } else {
-            sendBtn.alpha = 0.5f
+          if (clientServer != ClientServer.Unknown) {
+            sendBtn.isEnabled = sendChannel.state() == DataChannel.State.OPEN
+            if (sendBtn.isEnabled) {
+              sendBtn.alpha = 1.0f
+            } else {
+              sendBtn.alpha = 0.5f
+            }
           }
         }
       }
@@ -355,19 +403,110 @@ class DemoActivity : AppCompatActivity() {
         Log.d(TAG, "onRemoveStream: ")
       }
 
+
       override fun onDataChannel(recvChannel: DataChannel) {
-        Log.d(TAG, "onDataChannel: ")
+        Log.d(TAG, "onDataChannel2: ")
         recvChannel.registerObserver(object : DataChannel.Observer {
           override fun onBufferedAmountChange(l: Long) {}
           override fun onStateChange() {}
           override fun onMessage(buffer: DataChannel.Buffer) {
-            val msg = byteBufferToString(buffer.data)
-            Log.d(TAG, "data channel onMessage: got message$msg")
-            runOnUiThread {
-              Log.d(TAG, "Updating message")
-              messages.add(Message(msg, isRecv = true))
-              msgAdapter.notifyDataSetChanged()
+            Log.d(TAG, "onMessage called with DataChannel")
+            val buf = byteBufferToByteArray(buffer.data)
+            val msg = if (!buffer.binary) byteArrayToString(buf) else ""
+
+            if (clientServer == ClientServer.Unknown) {
+              val hisNumber = msg.trim().toLong()
+              Log.d(TAG, "Got hisNumber $hisNumber, myNumber $randomNumber")
+
+              if (randomNumber > hisNumber) {
+                Log.d(TAG, "Starting server")
+                clientServer = ClientServer.Server
+                storageEndpointManager =  DirectStorageEndpointManager(
+                  StoreManager(scope) { protocol ->
+                    StoreWriteBack(
+                      protocol,
+                      Channel.UNLIMITED,
+                      forceEnable = true,
+                      scope = scope
+                    )
+                  }
+                )
+
+              } else {
+                Log.d(TAG, "Starting client")
+                clientServer = ClientServer.Client
+                storageEndpointManager = RemoteStorageEndpointManager(
+                  outputChannel,
+                  inputChannel,
+                  scope
+                )
+              }
+
+
+              scope.launch {
+
+                RamDisk.clear()
+                // Initializing the environment...
+                WorkManagerTestInitHelper.initializeTestWorkManager(this@DemoActivity)
+
+                // Set up the Database manager, drivers, and keys/key-parsers.
+                val dbManager = AndroidSqliteDatabaseManager(this@DemoActivity).also {
+                  // Be sure we always start with a fresh, empty database.
+                  it.resetAll()
+                }
+
+                DriverAndKeyConfigurator.configure(dbManager)
+                arcHost = ChatHost(
+                  coroutineContext,
+                  schedulerProvider,
+                  storageEndpointManager,
+                  ChatParticle::class.toParticleIdentifier() to chatParticleCtor
+                )
+                hostRegistry = ExplicitHostRegistry().also {
+                  it.registerHost(arcHost)
+                }
+                allocator = Allocator.create(
+                  hostRegistry,
+                  EntityHandleManager(
+                    time = JvmTime,
+                    scheduler = schedulerProvider("chatArc"),
+                    storageEndpointManager = storageEndpointManager
+                  )
+                )
+                if (clientServer == ClientServer.Server) {
+                  Log.d(TAG, "Starting RemoteStorageEndpointManagerServer")
+
+                  RemoteStorageEndpointManagerServer<CrdtData, CrdtOperationAtTime, Any?>(
+                    outputChannel,
+                    inputChannel,
+                    storageEndpointManager!!,
+                    scope
+                  ).start()
+                }
+
+                Log.d(TAG, "Starting outputChannel")
+
+                outputChannel.openSubscription().consumeAsFlow().onEach { msg ->
+                  sendChannel.send(DataChannel.Buffer(ByteBuffer.wrap(msg),true))
+                }.launchIn(scope)
+
+                Log.d(TAG, "Starting Arc")
+                arc = allocator.startArcForPlan(if (clientServer == ClientServer.Client) ChatRecipeOnePlan else ChatRecipeTwoPlan)
+                Log.d(TAG, "Waiting for Arc")
+                arc.waitForStart()
+                Log.d(TAG, "Getting Particle")
+                chatParticle = arcHost.getParticle<ChatParticle>(arc.id.toString(), "ChatParticle")
+                runOnUiThread {
+                  sendBtn.isEnabled = true
+                  sendBtn.alpha = 1.0f
+                }
+              }
+            } else {
+              Log.d(TAG, "Bytes received sending to input channel ${buffer.data}")
+              inputChannel.offer(buf)
             }
+
+            Log.d(TAG, "data channel onMessage: got message $msg")
           }
         })
       }
@@ -386,6 +525,21 @@ class DemoActivity : AppCompatActivity() {
 
   private fun stringToByteBuffer(msg: String): ByteBuffer {
     return ByteBuffer.wrap(msg.toByteArray(Charset.defaultCharset()))
+  }
+
+  private fun byteBufferToByteArray(buffer: ByteBuffer): ByteArray {
+    val bytes: kotlin.ByteArray
+    if (buffer.hasArray()) {
+      bytes = buffer.array()
+    } else {
+      bytes = kotlin.ByteArray(buffer.remaining())
+      buffer.get(bytes)
+    }
+    return bytes
+  }
+
+  private fun byteArrayToString(bytes: ByteArray): String {
+    return String(bytes, Charset.defaultCharset())
   }
 
   private fun byteBufferToString(buffer: ByteBuffer): String {
@@ -444,4 +598,66 @@ class DemoActivity : AppCompatActivity() {
   companion object {
     const val TAG = "Demo"
   }
+}
+
+class ChatParticle(val receiver: (String, Particle) -> Unit) : AbstractChatParticle() {
+
+  override fun onFirstStart() {
+    Log.d(DemoActivity.TAG, "ChatParticle first start")
+  }
+  override fun onReady() {
+    Log.d(DemoActivity.TAG, "ChatParticle ready")
+    handles.inMessage.onUpdate { delta ->
+      Log.d(DemoActivity.TAG, "ChatParticle onUpdate $delta")
+      if (delta.new != null) {
+        receiver(handles.inMessage.fetch()?.message ?: "", this)
+      }
+    }
+  }
+
+  suspend fun sendMessage(msg: String) {
+    Log.d(DemoActivity.TAG, "ChatParticle send $msg")
+    withContext(handles.dispatcher) {
+      handles.outMessage.store(Chat(msg))
+    }
+  }
+}
+
+@ExperimentalCoroutinesApi
+class ChatHost(
+  coroutineContext: CoroutineContext,
+  schedulerProvider: SchedulerProvider,
+  storageEndpointManager: StorageEndpointManager,
+  vararg particleRegistrations: ParticleRegistration
+) : AbstractArcHost(
+  coroutineContext = coroutineContext,
+  updateArcHostContextCoroutineContext = coroutineContext,
+  schedulerProvider = schedulerProvider,
+  storageEndpointManager = storageEndpointManager,
+  initialParticles = *particleRegistrations
+) {
+  override val platformTime = JvmTime
+
+  @Suppress("UNCHECKED_CAST")
+  suspend fun <T> getParticle(arcId: String, particleName: String): T {
+    val arcHostContext = requireNotNull(getArcHostContext(arcId)) {
+      "ArcHost: No arc host context found for $arcId"
+    }
+    val particleContext = requireNotNull(
+      arcHostContext.particles.first {
+        it.planParticle.particleName == particleName
+      }
+    ) {
+      "ArcHost: No particle named $particleName found in $arcId"
+    }
+    val allowableStartStates = arrayOf(ParticleState.Running, ParticleState.Waiting)
+    check(particleContext.particleState in allowableStartStates) {
+      "ArcHost: Particle $particleName has failed, or not been started"
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    return particleContext.particle as T
+  }
+
+  override fun toString(): String = "ShowcaseHost"
 }
